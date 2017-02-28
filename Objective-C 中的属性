@@ -1,0 +1,64 @@
+##Objective-C 中的属性
+下表是属性声明的属性与所有权修饰符的对应关系：
+
+|属性声明中的属性|所有权修饰符|
+|:---|:----|
+|assign|_unsafe_unretained修饰符|
+|copy|_strong修饰符|
+|retain|_strong修饰符|
+|strong|_strong修饰符|
+|unsafe_unretained|_unsafe_unretained修饰符|
+|weak|_weak修饰符|
+
+###属性的特性
+
+任何一个属性可以声明为**readwrite**或**readonly**，默认为**readwrite**。readwrite代表程序应该自动创建存取方法。如果无需创建存方法，则可以将属性声明为readonly。
+
+
+###生命周期特性
+
+生命周期特性包括：**unsafe_unretained**，**assign**，**strong**, **weak**, **copy**.
+
+assign是默认的，也是最简单的：存方法会将传入的值直接赋给实例变量。以下面这段声明及定义为例：
+
+    @property (assign) int averageScore;
+    
+这段代码等同于实现了下列存方法：
+
+    - (void) setAverageScore:(int)d
+    {
+        _averageScore = d;
+    }
+    
+strong特性，要求保留传入的对象，并放弃原有对象。如果原有对象不再有其他拥有方，就会被释放。凡是指向对象的实例对象，通常都应该使用strong特性。
+
+weak特性，要求不保留传入的对象。如果该对象被释放，那么相应的实例变量会被自动赋为nil。这样做可以避免产生悬空指针。悬空指针指向的是不再存在的对象，向它发送消息通常会导致程序崩溃。相应的存方法会将传入的对象直接赋为实例变量。
+
+unsafe_unretained要求不保留传入的对象。在Cocoa和Cocoa Touch中有一些类是不支持弱引用的，所以不能使用weak属性或者weak局部变量。这些类包括NSTextView, NSFont和NSColorSpace。如果要使用弱引用来指向这些类，就必须使用不安全的引用，即unsafe_unretained。它和weak类似，但是当它指向的对象被释放后，它自身并不会被置为nil。所以当你释放了它指向的那个对象，那么它就变成了一个悬挂指针，因此是不安全的。
+
+copy特性要求拷贝传入的对象，并将新对象赋予实例变量。以下面这段代码为例：
+
+    @property (copy) NSString* lastName;
+    
+    - (void) setLastName:(NSString *)d
+    {
+        lastName= [d copy];
+    }
+    
+有些类会有特定的子类，这些子类是可修改的。这种类型的对象适合使用copy特性。例如NSString，就有NSMutableString的子类。而向setLastName:方法传入NSMutableString对象是有效的：
+
+    NSMutableString *x = [[NSMutableString alloc] initWithString:@"Ono"];
+    [myObj setLastName:x];
+    
+    //因为setLastName:会拷贝传入的对象，所以修改x不会对实例变量产生影响
+    [x appendString:@"Lennon"];
+    
+因为设置了copy特性，所以lastName的值就是调用[myObj setLastName:x]时x的值，
+即使后面x的值发生了改变，lastName的值也不会受到影响。
+
+另外，当属性是一个Block时，也需要使用copy。
+
+@property (copy) void (^blockProperty)(void);
+
+    
+

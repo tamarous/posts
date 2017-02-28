@@ -1,0 +1,25 @@
+#Obscure Topics In Cocoa & Objective-C 学习笔记（二）
+
+### UILocalizedIndexedCollation
+当UITableView有很多行时，用户可能需要很久才能在无尽的滑动后找到他们所需的那一行数据。一个较为常见的解决方案是使用如同下图右侧所示的索引。
+
+![Picture](http://7xnyik.com1.z0.glb.clouddn.com/IMG_2847.png-picVer)
+
+要想让普通的TableView拥有索引，需要在TableViewController中实现两个UITableViewDataSource委托方法：
+> \- (NSArray<NSString *> *)sectionIndexTitlesForTableView:(UITableView *)tableView
+
+> \- (NSInteger) sectionForSectionIndexTitleAtIndex:(NSInteger) indexTitleIndex
+
+第一个方法返回TableView中每个节的标题，第二个方法返回一个节序号，当右侧索引标题被点击时，TableView应该滑动到这个节的位置。
+
+### UIAppearance
+
+
+
+
+
+
+
+
+
+
