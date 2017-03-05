@@ -1,5 +1,5 @@
 # Objective-C 中的block
-block 是Apple 为C语言提供的语言扩充，其实质是：带有自动变量的匿名函数。block 在iOS的动画、异步网络请求以及GCD等中被广泛使用。但是，它的语法却有点复杂，有人甚至专门做了一个[网站](http://fuckingblocksyntax.com)，从网址中就可以看出他对block 的语法有多少怨言了。
+block 是Apple 为C语言提供的语言扩展，其实质是：带有自动变量的匿名函数。block 在iOS的动画、异步网络请求以及GCD等中被广泛使用。但是，它的语法却有点复杂，有人甚至专门做了一个[网站](http://fuckingblocksyntax.com)来记录block 的用法，从网址中就可以看出他对block 的语法有多少怨言了。
 
 ## block 语法
 
@@ -428,16 +428,142 @@ reserved 为今后版本升级所需的区域，Block_size 为一个记录大小
 `_Block_object_copy`和`_Block_object_dispose`的最后一个参数都是8，这个8代表了`BLOCK_FIELD_IS_BYREF`，定义在头文件Block_private.h 中，用来说明被__block 修饰的是栈区的变量。
 
 ## block 的内存管理
+### _NSConcreteStackBlock
+在结构体`__main_block_impl_0`的构造函数中，有如下一行代码：
+    
+    impl.isa = &_NSConcreteStackBlock;
 
+这说明该block 的类型为`_NSConcreteStackBlock`，从名字上可以知道，这种block 被分配在栈上。
+另外还有两种类型：
+* _NSConcreteGlobalBlock，这种block 被分配在程序的数据段(.data)，属于全局的静态block，不会访问任何外部变量
+* _NSConcreteMallocBlock，这种block 被分配在由malloc 函数分配的内存中，即堆上，当引用计数为0时会被销毁。
 
+在上面三个例子中，所得到的block 的类型均为`_NSConcreteStackBlock`，那么什么时候才会得到另外两种类型的block 呢？
 
+### _NSConcreteGlobalBlock
+我们知道，C++程序中的全局变量会被分配在程序的数据段，因此可以猜想如果block 的定义也发生在全局作用域，那么它的类型可能就成为`_NSConcreteGlobalBlock`了。让我们写代码验证一下：
+
+    void (^ blk)(void) = ^{
+        printf("Hello, World!\n");
+    };
+    
+    int main() {
+        blk();
+        return 0;
+    }
+
+转换后：
+    
+        struct __blk_block_impl_0 {
+            struct __block_impl impl;
+            struct __blk_block_desc_0* Desc;
+            __blk_block_impl_0(void *fp, struct __blk_block_desc_0 *desc, int flags=0)  {
+            impl.isa = &_NSConcreteGlobalBlock;
+            impl.Flags = flags;
+            impl.FuncPtr = fp;
+            Desc = desc;
+            }
+        };
+果然！
+《Objective-C 高级编程》中介绍说还有另外一种情况下生成的block 也会是`_NSConcreteGlobalBlock`，如下：
+
+    typedef int (^blk)(int);
+    for(int rate = 0; rate < 10; rate++) {
+        blk blk_t = ^(int count) {
+            return count;
+        };
+    }
+
+这段代码中block 虽然捕获了自动变量rate，但是并没有使用自动变量，因此类型会是`_NSConcreteGlobalBlock`。
+
+注意，在这里，虽然转换后的代码中
+    
+    impl.isa = &_NSConcreteStackBlock
+
+但是由于clang改写的方式和LLVM不太一样，所以实际上，block 的类型为`_NSConcreteGlobalBlock`，可以在Xcode 中进行验证：
+    
+    NSLog(@"blk = %@",blk);
+输出结果为
+
+    blk = <__NSGlobalBlock__:0x1079340d0>
+
+总结，当是下列两种情况之一时，生成的block 的类型为`_NSConcreteGlobalBlock`
+1. block 被定义在全局作用域上
+2. block 的表达式中没有使用应该截获的自动变量
+
+### _NSConcreteMallocBlock
+`NSConcreteMallocBlock`类型的block 通常不会直接出现，只有在block 被copy的时候，block 的类型才会被修改为`NSConcreteMallocBlock`。
+当调用`Block_copy(blk)`或者`[blk copy]`时，会发生block 的copy，也就是会调用
+    
+    _Block_copy(const void *arg) {
+        return _Block_copy_internal(arg, WANTS_ONE);
+    }
+    
+让我们看一下`_Block_copy_internal`的实现
+
+    static void *_Block_copy_internal(const void *arg, const int flags) {
+        struct Block_layout *aBlock;
+        const bool wantsOne = (WANTS_ONE & flags) == WANTS_ONE;
+    
+        // 1
+        if (!arg) return NULL;
+    
+        // 2
+        aBlock = (struct Block_layout *)arg;
+    
+        // 3
+        if (aBlock->flags & BLOCK_NEEDS_FREE) {
+            // latches on high
+            latching_incr_int(&aBlock->flags);
+            return aBlock;
+        }
+    
+        // 4
+        else if (aBlock->flags & BLOCK_IS_GLOBAL) {
+            return aBlock;
+        }
+    
+        // 5
+        struct Block_layout *result = malloc(aBlock->descriptor->size);
+        if (!result) return (void *)0;
+    
+        // 6
+        memmove(result, aBlock, aBlock->descriptor->size); // bitcopy first
+    
+        // 7
+        result->flags &= ~(BLOCK_REFCOUNT_MASK);    // XXX not needed
+        result->flags |= BLOCK_NEEDS_FREE | 1;
+    
+        // 8
+        result->isa = _NSConcreteMallocBlock;
+    
+        // 9
+        if (result->flags & BLOCK_HAS_COPY_DISPOSE) {
+            (*aBlock->descriptor->copy)(result, aBlock); // do fixup
+        }
+    
+        return result;
+    }
+这个方法作了下面几件事：
+1. 如果传进来的参数为NULL，那么直接返回NULL。
+2. 将参数转化为一个指向`Block_layout`结构体的指针aBlock。
+3. 如果aBlock 的flag 包含`BLOCK_NEEDS_FREE`，那么这个block 就在堆上，将它的引用计数加1后返回这个block。
+4. 如果这个aBlock 是个全局block，那么直接返回它自身。
+5. 如果走到了这一步，那么这个aBlock 一定是在栈上分配的了。因此我们使用malloc 在堆上创建一块内存区域result
+6. 使用memmove 来将栈上的aBlock 拷贝到刚刚分配的那块内存中去。
+7. 设置result的标记位
+8. 将result的类型设置为`_NSConcreteMallocBlock`
+9. 如果result 拥有一个copy helper函数，那么就会调用这个函数
 
 ##小结
-
+本文对block 的相关知识点进行了一些整理，期间查阅了如下的资料，在此向原作者们表示感谢。
 ###引用
 * [How Blocks are implemented(and the consequences)](https://www.cocoawithlove.com/2009/10/how-blocks-are-implemented-and.html)
 * [Objective-C 中的Block](https://onevcat.com/2011/11/objc-block/)
-* [Parse](blog.parse.com/learn/engineering/objective-c-blocks-quiz/)
+* [Objective-C blocks quiz](blog.parse.com/learn/engineering/objective-c-blocks-quiz/)
 * [Objective-C中的Block<一>](http://oriochan.com/14710939919047.html)
+* [A look inside blocks: Episode 3 (Block_copy)](http://www.galloway.me.uk/2013/05/a-look-inside-blocks-episode-3-block-copy/)
+* [谈Objective-C block的实现](http://blog.devtang.com/2013/07/28/a-look-inside-blocks/) 
     
+
 
