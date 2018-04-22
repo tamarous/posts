@@ -1,18 +1,18 @@
 # 揭开Runtime 的神秘面纱
 
 ## 概述
-### 什么是Objectie-C Runtime？
-Objective-C Runtime 是一个主要用C和汇编语言写成的库，它为C语言添加了面向对象的一些特性。运行时要负责诸如加载类信息、进行方法分发、方法传递等一系列工作。
-
 ### 动态 vs 静态语言
 Objective-C 是一门动态语言，刚接触Objective-C 的时候，你一定会为它使用方括号这种怪异的“函数调用”方式而感到惊讶。准确的说，Objective-C 中的如下语句
 
     [receiver message]
     
-并不等同于C语言中的函数调用，而是向receiver 对象发送message 消息。C语言中的函数调用是在编译期间确定的，而Objective-C 是一门面向runtime的语言，也就是说，它把消息发送的时机从编译&链接时延后到了运行时。这正是Objective-C 众多的黑魔法的源头所在。
+并不等同于C语言中的函数调用，而是向receiver 对象发送message 消息。C语言中的函数调用是在编译期间确定的，而Objective-C 是一门面向 Runtime 的语言，也就是说，它把消息发送的时机从编译&链接时延后到了运行时。这正是Objective-C 众多的黑魔法的源头所在。
+
+### 什么是Objectie-C Runtime？
+Objective-C Runtime 是一个主要用C和汇编语言写成的库，它为C语言添加了面向对象的一些特性。运行时要负责诸如加载类信息、进行方法分发、方法传递等一系列工作。
 
 ## Objective-C 中的对象模型
-我们知道，C语言是不支持面向对象特性的，而Objective-C 作为一门面向对象语言，却架构在C语言的基础上，这其中Apple 的工程师一定做了相当多的努力。下面就让我们从Objective-C 的[源代码](https://opensource.apple.com/source/objc4/objc4-706/)出发，去看一看Objective-C 是怎么实现这一切的。
+在介绍 Runtime 之前，我们还得先介绍一下 Objective-C 的对象模型，只有掌握了它，才能对 Objective-C 的 Runtime 有更好的理解。我们知道，C语言是不支持面向对象特性的，而 Objective-C 作为一门面向对象语言，却架构在C语言的基础上，这其中 Apple 的工程师一定做了相当多的努力。下面就让我们从Objective-C 的[源代码](https://opensource.apple.com/source/objc4/objc4-706/)出发，去看一看Objective-C 是怎么实现这一切的。
 在Objective-C 中，类的类型为`Class`。它实质上是一个指向结构体`objc_class`的指针。
     
     typedef struct objc_class *Class;
@@ -32,41 +32,30 @@ Objective-C 是一门动态语言，刚接触Objective-C 的时候，你一定�
     #endif
     }
     
-其中有几个字段是我们所关心的：
+其中有几个字段是比较重要的：
 
 * isa：指向类本身的指针。
 * super_class：指向该类的父类。如果该类已经是最顶层的根类，则super_class的值为NULL。
 * cache：用来缓存最近使用过的方法。
-* methodLists：是一个指向`objc_method_list`的指针的指针，用来存储类中的方法的。
-* protocols：与methodLists类似，用来存储类所遵循的协议。
+* methodLists：用来存储类中的方法。
+* protocols：用来存储类所遵循的协议。
 
-isa 指针指明了当前对象所属的类。实例对象的isa 指向了该实例对象所属的类，然而在Objective-C 中，类本身也是一个对象，称为**类对象**。举例来说：
+isa 指针指明了当前对象所属的类。实例对象的isa 指向了该实例对象所属的类，称为**类对象**。一个实例对象本身并不存储它能响应的消息，当我们给它发送一个消息时，Runtime 会从它的类对象的 methodslist 中进行寻找。
+
+举例来说：
     
     NSString *str = [NSString stringWithFormat:@"%d",1];
     
-在这里，`NSString` 是`stringWithFormat:`消息的接收者，它是一个类对象。
-那么有意思的是：类对象的isa 指向谁呢？是指向这个类本身吗？
+在这里，str 是 NSString 类的一个实例，因此 str 的 isa 指针指向的就是NSString，NSString 就是一个类对象。
 
+类对象呢，它本身也为一个 Objective-C 对象，因此也有一个 isa 指针。那么类对象的 isa 指针指向谁呢？
 在Objective-C 中，有一个元类（`metaclass`）的概念，可以解释这个问题。
 > The meta-class is the class for a Class object.
 
-类对象的isa 指针指向这个类对象的元类。元类本身也是一个类。当我们向一个实例对象发送消息时，runtime 会在这个对象所属的类的方法列表中寻找方法；当我们向一个类对象发送消息时，runtime 会在这个类对象的元类的方法列表中寻找方法实现。
+类对象的isa 指针指向这个类对象的元类。元类本身也是一个类。当我们向一个实例对象发送消息时，Runtime 会在这个对象的类对象的 methodlists 中寻找方法；当我们向一个类对象发送消息时，Runtime 会在这个类对象的元类的 methodlists 中寻找方法实现。
 
 既然元类本身也是一个类，所以元类也有一个isa 指针。
 元类的isa 指向基类（NSObject）的isa。而基类的isa 指针指向它们自身。
-
-在创建类的实例的过程中，会调用`class_createInstance`函数，这个函数的返回值类型是id。id是Objective-C 中表示通用类型的指针，有点类似于C语言中的`void *`。id的定义如下：
-    
-    typedef struct objc_object *id;
-
-所以id 其实就是objc_object 类型的指针，进而我们推测，Objective-C 中的类的实例，在底层实现上应该都与这个类型有点关系：
-    
-    struct objc_object {
-        Class isa;
-    } *id;
-
-可以看出这个结构体中只有一个成员，即为我们上文中提过的isa 指针。事实上，在Objective-C 中，只要某个数据结构中有一个`Class isa`成员，这个数据结构就会被认作是一个`objc_object`。
-
 
 ### objc_method 与objc_method_list
 
@@ -76,7 +65,7 @@ isa 指针指明了当前对象所属的类。实例对象的isa 指向了该实
         IMP method_imp; // 方法的指针
     }
 
-关于SEL 和IMP 的关系，可以参考下[这篇文章](www.cocoawithlove.com/2008/02/imp-of-current-method.html)。
+关于SEL 和IMP 的关系，可以参考下[这篇文章](www.cocoawithlove.com/2008/02/imp-of-current-method.html)。简而言之，SEL 和 IMP 是一一对应的关系，SEL 是方法的名称，而 IMP 则是实际的方法实现的指针。类的消息分发表会把 SEL 和 IMP 进行一一映射，使得 Runtime 在进行消息分发时，可以依据 SEL 找到对应的 IMP，也就是找到真正的方法实现。
 
     struct objc_method_list {
         struct objc_method_list *obsolete;
@@ -108,7 +97,7 @@ objc_msgSend的函数原型如下：
 消息分发的关键就在于编译器为每个类和对象建立的结构体。每个结构体都包含了两个关键元素：
 
 * 上文提到过的isa 指针。
-* 一个class dispatch table。这个表中的每个条目将某个方法的selector 和该方法实现的地址相联系，然后记录在表中。
+* 一个class dispatch table。这个表中的每个条目将某个方法的 SEL 和该方法实现的地址 IMP 相联系，然后记录在表中。
 
 当一个新的对象被创建时，先分配给这个对象一块内存，然后对它进行初始化。`isa`指针给予了对象访问它自身的类及其父类的能力。
 
@@ -116,7 +105,7 @@ objc_msgSend的函数原型如下：
 
 
 当发送一条消息`[receiver selector]`时，如果receiver 是一个实例对象：
-1. 通过receiver 的isa 指针找到receiver 所属的类；
+1. 通过receiver 的isa 指针找到receiver 的类对象；
 2. 在receiver 的类的methodLists 中寻找对应的selector；
 3. 如果receiver 的类中没有selector，那么就继续在receiver 的superclass 中进行寻找；
 4. 一旦找到这个selector，就去执行此方法对应的IMP。
@@ -137,8 +126,7 @@ con(yes)->op3->e
 con(no)->op1
 ```
 
-
-为了加速消息分发的过程，运行时系统使用了一个叫做cache的指针来缓存selector 和IMP 。当下一次调用的时候，运行时系统就会首先在cache 中进行查找，如果cache 里面没有，才会到methodLists 中查找方法。
+为了加速消息分发的过程，Runtime 使用了一个叫做cache的指针来缓存selector 和IMP 。当下一次调用的时候，Runtime 就会首先在cache 中进行查找，如果cache 里面没有，才会到methodLists 中查找方法。
 
 ### 使用隐藏参数
 在上节中，我们提到编译器会将receiver 和selector 以及其他附加参数当作参数传入`objc_msgSend`中，其中receiver 和 selector 是以一种隐藏的方式来进行传递的。虽然没有明确地在方法实现中进行定义，但是它们会在编译时被添加进方法实现中。在方法实现中，也可以引用它们。self 被用来引用receiver，而_cmd 则用来引用selector。
@@ -166,20 +154,15 @@ con(no)->op1
     }
 
 ## 消息转发机制
-如果一个对象不能处理某个消息，那么通常会引发一个`unrecognized selector sent to...`的异常。但是在抛出这个异常之前，运行时系统会给你三次处理该错误的机会。 
+如果一个对象不能处理某个消息，那么通常会引发一个`unrecognized selector sent to...`的异常。但是在抛出这个异常之前，Runtime 会给你三次处理该错误的机会。 
 
 * Method resolution
 * Fast forwarding
 * Normal forwarding
 
 ### Dynamic Method Resolution
-Objective-C 方法不过是一个接受self 和_cmd 作为参数的C函数。使用函数 `class_addMethod`就可以动态地给某个类添加方法。因此，给出下面这个函数：
 
-    void dynamicMethodIMP(id self, SEL _cmd) {
-        // implementation
-    }
-    
-假设MyClass 中没有`resolveThisMethodDynamically`这个方法，那么可以像这样使用`resolveInstanceMethod:`或是`resolveClassMethod:`来提供一个函数实现：
+假设我们给一个类 MyClass的实例发送`resolveThisMethodDynamically`，而 MyClass 并没有实现这个方法，那么可以像这样使用`resolveInstanceMethod:`或是`resolveClassMethod:`来提供一个函数实现：
 
     @implementation MyClass
     + (BOOL) resolveInstanceMethod:(SEL) aSEL {
@@ -190,7 +173,11 @@ Objective-C 方法不过是一个接受self 和_cmd 作为参数的C函数。使
         return [super resolveInstanceMethod: aSEL];
     }
     @end
-运行时系统会将`dynamicMethodIMP`这个函数添加到MyClass 的方法中。
+Runtime 会将`dynamicMethodIMP`这个函数添加到MyClass 的方法中。
+
+    void dynamicMethodIMP(id self, SEL _cmd) {
+        // implementation
+    }
 
 在iOS 4.3以后，可以使用block 来快速创建一个IMP：
 
@@ -201,10 +188,10 @@ Objective-C 方法不过是一个接受self 和_cmd 作为参数的C函数。使
     
     class_addMethod([self class], aSEL, dynamicIMP, "v@:");
     
-如果resolveXX 方法返回NO，运行时系统就会转向下一步：Fast Forwarding。
+如果没有提供一个方法，那么resolveXX 方法就会返回NO，Runtime 就会转向下一步：Fast Forwarding。
 
 ### Fast Forwarding
-在这个时候，运行时系统试图将这个selector 转发给另外一个对象来进行处理：
+在这个时候，Runtime 试图将这个selector 转发给另外一个对象来进行处理：
 
     -(id) forwardingTargetForSelector:(SEL) aSEL {
         if ([SecondObject respondToSelector: aSEL]) {
@@ -213,11 +200,11 @@ Objective-C 方法不过是一个接受self 和_cmd 作为参数的C函数。使
         return [super forwardingTargetForSelector: aSEL];
     }
 
-只要这个方法返回的不是nil或者self，整个消息发送的过程就会在SecondObject 上重新启动。否则就会继续进行Normal Forwarding。
+只要这个方法返回的不是nil或者self，整个消息发送的过程就会在 SecondObject 上重新启动。否则就会继续进行Normal Forwarding。
 
 ### Normal Forwarding
 当事情真的进行到这一步的时候，就要启用完整的消息转发机制了。
-首先运行时系统会发送`methodSignatureForSelector:`消息获得函数的参数和返回值类型，如果返回值为nil，运行时就会发出一个`doesNotRecognizeSelector:`消息，然后程序就挂掉了。如果这返回的是一个函数签名，运行时系统就会创建一个NSInvocation 对象，这个对象实际上就是对aSEL的描述，包括aSEL的selector以及各种参数等信息，之后发送`forwardInvocation`消息给receiver，即目标对象。
+首先Runtime 会发送`methodSignatureForSelector:`消息获得函数的参数和返回值类型，如果返回值为nil，运行时就会发出一个`doesNotRecognizeSelector:`消息，然后程序就挂掉了。如果这返回的是一个函数签名，Runtime 就会创建一个NSInvocation 对象，这个对象实际上就是对aSEL的描述，包括aSEL的selector以及各种参数等信息，之后发送`forwardInvocation`消息给receiver，即目标对象。
 
     - （void) forwardInvocation:(NSInvocation *)anInvocation {
         if ([someOtherObject respondsToSelector:[anInvocation selector]]) {
@@ -379,8 +366,8 @@ Runtime 中以class 开头的函数都是用来直接对类进行操作的。我
 Objective-C 中的Runtime 的知识点很多，而且不管是在面试还是在实际工作中都有着超高的出场率。因此掌握Runtime 的原理和用途非常有必要。
  
 ### Reference:
-* [Objective-C Runtime运行时之一：类与对象](southpeak.github.io/2014/10/25/objective-c-runtime-1/)
-* [Objective-C Runtime](tech.glowing.com/cn/objective-c-runtime/)
+* [Objective-C Runtime运行时之一：类与对象](southpeak.github.io/2014/10/25/objective-c-Runtime-1/)
+* [Objective-C Runtime](tech.glowing.com/cn/objective-c-Runtime/)
 * [Objective-C Runtime Programming Guide](https://developer.apple.com/library/content/documentation/Cocoa/Conceptual/ObjCRuntimeGuide/Introduction/Introduction.html#//apple_ref/doc/uid/TP40008048-CH1-SW1)
 * Effective Objective-C，#12 理解消息转发机制
 * [What is a meta-class in Objective-C?](https://www.cocoawithlove.com/2010/01/what-is-meta-class-in-objective-c.html)
