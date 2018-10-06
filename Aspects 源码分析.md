@@ -285,11 +285,19 @@ static void aspect_prepareClassAndHookSelector(NSObject *self, SEL selector, NSE
     }
 }
 ```
-这个方法也比较复杂，因此我们也是将它分成四个小步骤来分析。
+这个方法也比较复杂，因此我们将它分成四个小步骤来分析。
 第(1)步，调用`aspect_hookClass`：
 ```
 static Class aspect_hookClass(NSObject *self, NSError **error) {
     NSCParameterAssert(self);
+    
+   // 这里是比较容易混淆的地方
+   // .class 方法，当 self 是一个 instance 的时候，返回 self 的类对象;
+   // 当 self 是一个类对象的时候，返回它自身
+   // object_getClass 方法则是获取 self 的 isa 指针指向的对象，如果self 是一个
+   // instance，那么返回一个类对象;如果 self 是一个类对象，则返回一个元类
+
+    
 	Class statedClass = self.class;
 	Class baseClass = object_getClass(self);
 	NSString *className = NSStringFromClass(baseClass);
@@ -314,7 +322,13 @@ static Class aspect_hookClass(NSObject *self, NSError **error) {
 	Class subclass = objc_getClass(subclassName);
 
 	if (subclass == nil) {
-	   // 创建出一个新的 Class 出来
+	   // 创建出一个新的 Class 出来，基本步骤有下面几个：
+	   // 1. 通过objc_allocateClassPair来创建一个新的子类
+	   // 2. 通过class_addMethod, class_addIvar来向新的子类添加方法和实例变量
+	   // 3. 通过objc_registerClassPair来向运行时系统注册这个新类
+	   // 完成以上3步后就可以使用这个新建的类了
+	   
+	   // subclass是 baseClass 的子类，类名是subclassName
 		subclass = objc_allocateClassPair(baseClass, subclassName, 0);
 		if (subclass == nil) {
             NSString *errrorDesc = [NSString stringWithFormat:@"objc_allocateClassPair failed to allocate class %s.", subclassName];
@@ -332,7 +346,7 @@ static Class aspect_hookClass(NSObject *self, NSError **error) {
 		objc_registerClassPair(subclass);
 	}
 
-    // 将 self所属类的类型改为我们刚刚创建出来的带有_Aspects_后缀的类
+    // 将 self 所属类的类型改为我们刚刚创建出来的带有_Aspects_后缀的类
     // 这里可以通过在 Xcode 中打断点来进行验证
 	object_setClass(self, subclass);
 	// 返回这个子类
@@ -484,7 +498,7 @@ static void __ASPECTS_ARE_BEING_CALLED__(__unsafe_unretained NSObject *self, SEL
 }
 ```
 所以这个方法的作用就是根据 option 的设置，在合适的时机调用原来的方法实现以及我们的钩子函数。
-以上就是 Aspects这个库进行方法 Hook 的基本原理了。
+以上就是 Aspects这个库进行方法 Hook 的基本原理了。 
 
 
 
